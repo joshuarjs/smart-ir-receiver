@@ -1,0 +1,1287 @@
+<!doctype html>
+<!--
+  Smart IR Receiver console. Readable source: edit it, then run tools/make_webui.py, which
+  minifies it and gzips it into webui.h. The page polls /api/status about once a second and
+  reloads /api/config whenever its "rev" changes.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+    <title>Smart IR Receiver</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='9' y='3' width='14' height='26' rx='4' fill='%232b62a8'/%3E%3Ccircle cx='16' cy='9' r='2.5' fill='%23fff'/%3E%3C/svg%3E"
+    />
+    <style>
+      /* AV receiver theme: dark faceplate, cyan display, amber for "something is happening". */
+      :root {
+        --bg: #0c0c0e;
+        --panel: #141518;
+        --field: #0c0c0e;
+        --tx: #e6e7ea;
+        --mut: #8a8d95;
+        --line: #2c2e33;
+        --line2: #1f2125;
+        --vfd: #5ff3e6;
+        --vfddim: #1d3a37;
+        --amber: #ffb547;
+        --bad: #ff8a7a;
+        color-scheme: dark;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      :root {
+        padding-top: env(safe-area-inset-top, 0px);
+        padding-bottom: env(safe-area-inset-bottom, 0px);
+      }
+      html {
+        scroll-padding-top: env(safe-area-inset-top, 0px);
+        background: var(--bg);
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--tx);
+        font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        font-variant-numeric: tabular-nums;
+      }
+      main {
+        max-width: 1040px;
+        margin: 0 auto;
+        padding: 18px 14px 36px;
+      }
+      .mono {
+        font-family: ui-monospace, "Cascadia Mono", Consolas, Menlo, monospace;
+      }
+
+      /* ---- Faceplate + display ---- */
+      .face {
+        display: flex;
+        align-items: center;
+        gap: 22px;
+        padding: 16px 20px;
+        margin-bottom: 14px;
+        border-radius: 10px;
+        border: 1px solid #3a3c42;
+        background:
+          repeating-linear-gradient(180deg, rgba(255, 255, 255, 0.025) 0 1px, transparent 1px 3px),
+          linear-gradient(180deg, #2b2c30, #141518);
+        box-shadow:
+          inset 0 1px 0 #4a4d55,
+          0 3px 0 #000;
+      }
+      .fl {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .ttl {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 12px;
+        height: 22px;
+      }
+      h1 {
+        margin: 0;
+        font-size: 15px;
+        font-weight: 600;
+        letter-spacing: 0.3em;
+        text-transform: uppercase;
+        color: #c9cbd0;
+        white-space: nowrap;
+      }
+      .sub {
+        font-size: 11.5px;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--mut);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .vfd {
+        height: 76px;
+        border-radius: 6px;
+        background: #030605;
+        border: 1px solid #000;
+        box-shadow: inset 0 3px 10px #000;
+        padding: 9px 16px;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        font-family: ui-monospace, "Cascadia Mono", Consolas, Menlo, monospace;
+        color: var(--vfd);
+        text-shadow: 0 0 6px rgba(95, 243, 230, 0.6);
+      }
+      .ann {
+        display: flex;
+        gap: 18px;
+        font-size: 10.5px;
+        letter-spacing: 0.18em;
+        height: 16px;
+        overflow: hidden;
+      }
+      .ann span {
+        color: var(--vfddim);
+        text-shadow: none;
+      }
+      .ann span.on {
+        color: var(--vfd);
+        text-shadow: 0 0 6px rgba(95, 243, 230, 0.6);
+      }
+      .ann span.amb {
+        color: var(--amber);
+        text-shadow: 0 0 6px rgba(255, 181, 71, 0.7);
+      }
+      .vline {
+        font-size: 17px;
+        letter-spacing: 0.04em;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .vfd.info .vline {
+        opacity: 0.8;
+      }
+      .vfd.warn {
+        color: var(--amber);
+        text-shadow: 0 0 6px rgba(255, 181, 71, 0.6);
+      }
+      .knob {
+        flex: none;
+      }
+
+      /* ---- Panels ---- */
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+      }
+      h2 {
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.24em;
+        text-transform: uppercase;
+        color: var(--mut);
+        margin: 22px 4px 8px;
+      }
+      input,
+      select,
+      button {
+        font: inherit;
+        color: inherit;
+      }
+      input[type="text"],
+      input[type="number"],
+      input[type="password"],
+      select {
+        height: 36px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--field);
+        padding: 0 10px;
+        width: 100%;
+        min-width: 0;
+      }
+      select option {
+        background: var(--panel);
+      }
+      button {
+        height: 34px;
+        border: 1px solid #6c6f76;
+        border-radius: 17px;
+        background: linear-gradient(180deg, #d8d9dc, #9c9ea3);
+        color: #1b1c1f;
+        font-weight: 600;
+        font-size: 14px;
+        padding: 0 14px;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      button:hover {
+        background: linear-gradient(180deg, #e6e7e9, #aeb0b4);
+      }
+      button:active {
+        transform: translateY(1px);
+      }
+      button:disabled {
+        opacity: 0.4;
+        cursor: default;
+      }
+      button.p {
+        background: var(--vfd);
+        border-color: var(--vfd);
+        color: #062421;
+      }
+      :focus-visible {
+        outline: 2px solid var(--vfd);
+        outline-offset: 2px;
+      }
+
+      /* ---- Sensors ---- */
+      #slots {
+        padding: 2px 16px;
+      }
+      .srow {
+        display: grid;
+        grid-template-columns: 12px 26px minmax(120px, 1.15fr) 134px 62px minmax(0, 2fr) 170px;
+        grid-template-areas: "dot num name mode state codes act";
+        column-gap: 12px;
+        align-items: center;
+        height: 58px;
+        border-top: 1px solid var(--line2);
+      }
+      .srow.head {
+        height: 32px;
+        border-top: none;
+        font-size: 10.5px;
+        letter-spacing: 0.22em;
+        text-transform: uppercase;
+        color: var(--mut);
+      }
+      .srow.head + .srow {
+        border-top-color: var(--line);
+      }
+      .dot {
+        grid-area: dot;
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: #26282d;
+        box-shadow: inset 0 1px 1px #000;
+      }
+      .dot.closed {
+        background: var(--amber);
+        box-shadow: 0 0 8px var(--amber);
+      }
+      .dot.on {
+        background: var(--vfd);
+        box-shadow: 0 0 8px var(--vfd);
+      }
+      .num {
+        grid-area: num;
+        font-family: ui-monospace, Consolas, monospace;
+        color: var(--mut);
+        font-size: 13px;
+      }
+      .sname {
+        grid-area: name;
+      }
+      .smode {
+        grid-area: mode;
+      }
+      .state {
+        grid-area: state;
+        font-size: 11.5px;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: var(--mut);
+      }
+      .state.closed {
+        color: var(--amber);
+      }
+      .codes {
+        grid-area: codes;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+        height: 46px;
+        overflow: hidden;
+        align-content: center;
+      }
+      .act {
+        grid-area: act;
+        display: flex;
+        gap: 8px;
+        justify-content: flex-end;
+      }
+      .learnb {
+        width: 86px;
+      }
+      .learnb.active {
+        background: #1b1c1f;
+        color: var(--amber);
+        border-color: var(--amber);
+        box-shadow: 0 0 10px rgba(255, 181, 71, 0.35);
+      }
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        height: 22px;
+        padding: 0 0 0 8px;
+        border-radius: 4px;
+        border: 1px solid var(--line);
+        font: 12px ui-monospace, Consolas, monospace;
+        color: #d5d7db;
+        white-space: nowrap;
+      }
+      .chip b {
+        font-weight: 400;
+        color: var(--mut);
+        cursor: pointer;
+        padding: 0 7px;
+        line-height: 20px;
+      }
+      .chip b:hover {
+        color: var(--bad);
+      }
+      .none {
+        color: var(--mut);
+        font-size: 13px;
+      }
+
+      /* ---- Recently received ---- */
+      #log {
+        padding: 0 16px;
+      }
+      .lrow {
+        display: grid;
+        grid-template-columns: 76px minmax(0, 1fr) 190px 200px;
+        grid-template-areas: "age code who sel";
+        column-gap: 10px;
+        align-items: center;
+        height: 48px;
+        border-top: 1px solid var(--line2);
+      }
+      .lrow:first-child {
+        border-top: none;
+      }
+      .lage {
+        grid-area: age;
+        color: var(--mut);
+        font-size: 13px;
+        white-space: nowrap;
+      }
+      .lcode {
+        grid-area: code;
+        font: 12.5px ui-monospace, Consolas, monospace;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .lwho {
+        grid-area: who;
+        font-size: 14px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .lwho.ok {
+        color: var(--vfd);
+      }
+      .lsel {
+        grid-area: sel;
+      }
+
+      /* ---- Buttons / System ---- */
+      .cols {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 0 16px;
+      }
+      @media (min-width: 900px) {
+        .cols {
+          grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+          align-items: start;
+        }
+      }
+      .rows {
+        padding: 4px 16px 14px;
+      }
+      .row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        min-height: 44px;
+        border-bottom: 1px solid var(--line2);
+      }
+      .row .l {
+        color: var(--mut);
+        flex: none;
+      }
+      .row .v {
+        text-align: right;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        min-width: 0;
+      }
+      .v.amb {
+        color: var(--amber);
+      }
+      .row select {
+        width: 150px;
+        flex: none;
+      }
+      .unit {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        color: var(--mut);
+        font-size: 13px;
+      }
+      .unit input {
+        color: var(--tx);
+        width: 110px !important;
+        text-align: right;
+      }
+      .net {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        min-width: 0;
+      }
+      .sm {
+        height: 30px;
+        padding: 0 12px;
+        font-size: 13px;
+      }
+      .grid2 {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+        margin-top: 12px;
+      }
+      .bar {
+        height: 6px;
+        border-radius: 3px;
+        background: #030605;
+        box-shadow: inset 0 1px 2px #000;
+        margin-top: 12px;
+        overflow: hidden;
+      }
+      .bar i {
+        display: block;
+        height: 100%;
+        width: 0;
+        background: var(--vfd);
+        box-shadow: 0 0 6px var(--vfd);
+      }
+      .msg {
+        min-height: 40px;
+        margin: 6px 0 0;
+        font-size: 13.5px;
+        color: var(--mut);
+      }
+      .msg.bad {
+        color: var(--bad);
+      }
+      .msg.ok {
+        color: var(--vfd);
+      }
+      .hint {
+        font-size: 12.5px;
+        color: var(--mut);
+        margin: 8px 0 0;
+      }
+      .file {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        min-height: 44px;
+        border-bottom: 1px solid var(--line2);
+      }
+      .file span {
+        flex: 1;
+        min-width: 0;
+        color: var(--mut);
+        font-size: 13.5px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .sec {
+        font-size: 10.5px;
+        font-weight: 600;
+        letter-spacing: 0.22em;
+        text-transform: uppercase;
+        color: var(--mut);
+        margin: 16px 0 0;
+        height: 22px;
+        display: flex;
+        align-items: center;
+      }
+      .foot {
+        color: var(--mut);
+        font-size: 11.5px;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        margin-top: 16px;
+        height: 18px;
+      }
+
+      /* ---- Dialogs ---- */
+      dialog {
+        border: 1px solid #3a3c42;
+        border-radius: 12px;
+        background: linear-gradient(180deg, #202125, #141518);
+        color: var(--tx);
+        padding: 18px;
+        width: min(440px, calc(100vw - 28px));
+        box-shadow: inset 0 1px 0 #4a4d55;
+      }
+      dialog::backdrop {
+        background: rgba(0, 0, 0, 0.6);
+      }
+      dialog h3 {
+        margin: 0 0 8px;
+        font-size: 13px;
+        font-weight: 600;
+        letter-spacing: 0.22em;
+        text-transform: uppercase;
+        color: #c9cbd0;
+      }
+      dialog p {
+        margin: 0 0 12px;
+        color: var(--mut);
+        font-size: 14px;
+      }
+      dialog p b {
+        color: var(--tx);
+      }
+      .wl {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-size: 13px;
+        color: var(--mut);
+        margin: 12px 0 5px;
+        min-height: 22px;
+      }
+      .lnk {
+        border: 0;
+        background: none;
+        color: var(--vfd);
+        height: 22px;
+        padding: 0;
+        font-size: 13px;
+        font-weight: 400;
+        text-decoration: underline;
+      }
+      .lnk:hover {
+        background: none;
+      }
+      .wpw {
+        display: flex;
+        gap: 8px;
+      }
+      .wst {
+        min-height: 60px;
+        margin: 12px 0 4px;
+        font-size: 14px;
+        color: var(--mut);
+      }
+      .wst.bad {
+        color: var(--bad);
+      }
+      .wst.ok {
+        color: var(--vfd);
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        button:active {
+          transform: none;
+        }
+      }
+
+      /* ---- Narrow screens: rows reflow into two lines ---- */
+      @media (max-width: 759px) {
+        main {
+          padding: 12px 10px 30px;
+        }
+        .face {
+          padding: 12px 14px;
+        }
+        .knob {
+          display: none;
+        }
+        .ttl {
+          flex-direction: column;
+          align-items: flex-start;
+          gap: 0;
+          height: 38px;
+        }
+        .vfd {
+          height: 84px;
+          padding: 8px 12px;
+        }
+        .ann {
+          gap: 12px;
+          font-size: 9.5px;
+          letter-spacing: 0.12em;
+        }
+        .vline {
+          font-size: 14.5px;
+          white-space: normal;
+          display: -webkit-box;
+          -webkit-line-clamp: 2;
+          -webkit-box-orient: vertical;
+          line-height: 1.3;
+        }
+        #slots,
+        #log,
+        .rows {
+          padding-left: 10px;
+          padding-right: 10px;
+        }
+        .srow.head {
+          display: none;
+        }
+        .srow {
+          grid-template-columns: 26px 126px minmax(0, 1fr) auto;
+          grid-template-areas:
+            "num name name act"
+            "dot mode codes codes";
+          align-content: center;
+          column-gap: 8px;
+          row-gap: 8px;
+          height: 108px;
+        }
+        .srow:nth-child(2) {
+          border-top: none;
+        }
+        .state {
+          display: none;
+        }
+        .dot {
+          justify-self: center;
+        }
+        .learnb {
+          width: 74px;
+        }
+        .act button {
+          padding: 0 11px;
+        }
+        .codes {
+          height: 46px;
+        }
+        .lrow {
+          grid-template-columns: minmax(0, 1fr) 168px;
+          grid-template-areas:
+            "code age"
+            "who sel";
+          row-gap: 4px;
+          align-content: center;
+          height: 76px;
+        }
+        .lage {
+          text-align: right;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header class="face">
+        <div class="fl">
+          <div class="ttl">
+            <h1>Smart IR Receiver</h1>
+            <span class="sub" id="sub">Connecting…</span>
+          </div>
+          <div class="vfd info" id="status" role="status">
+            <div class="ann" aria-hidden="true">
+              <span id="aW">WIFI</span><span id="aR">RAINMAKER</span><span id="aL">LEARN</span><span id="aH">HOTSPOT</span
+              ><span id="aU">UPDATE</span>
+            </div>
+            <div class="vline" id="stxt">Loading…</div>
+          </div>
+        </div>
+        <svg class="knob" width="96" height="96" viewBox="0 0 104 104" aria-hidden="true">
+          <circle cx="52" cy="52" r="48" fill="#111214" stroke="#3a3c42" stroke-width="2"></circle>
+          <circle cx="52" cy="52" r="38" fill="#26272b" stroke="#4a4d55" stroke-width="1"></circle>
+          <circle cx="52" cy="52" r="30" fill="#1b1c1f"></circle>
+          <line x1="52" y1="26" x2="52" y2="36" stroke="#5ff3e6" stroke-width="3" stroke-linecap="round"></line>
+        </svg>
+      </header>
+
+      <div class="card" id="slots">
+        <div class="srow head">
+          <span></span><span>Ch</span><span>Name</span><span>Mode</span><span>State</span><span>Learned buttons</span
+          ><span></span>
+        </div>
+      </div>
+
+      <h2>Recently received</h2>
+      <div class="card" id="log"></div>
+
+      <div class="cols">
+        <section>
+          <h2>Buttons</h2>
+          <div class="card rows">
+            <div class="row">
+              <span class="l">Momentary close time</span>
+              <span class="unit"><input type="number" id="hold" min="200" max="30000" step="100" />ms</span>
+            </div>
+            <div class="row">
+              <span class="l">Release after</span>
+              <span class="unit"><input type="number" id="rel" min="150" max="3000" step="50" />ms</span>
+            </div>
+            <p class="hint">
+              Momentary sensors stay closed for the close time after each press. A held button counts as released once
+              its signal stops for the release time.
+            </p>
+            <p class="hint">
+              Names here are only used on this page. Alexa uses the names set in the RainMaker app.
+            </p>
+          </div>
+        </section>
+
+        <section>
+          <h2>System</h2>
+          <div class="card rows">
+            <div class="row">
+              <span class="l">Network</span>
+              <span class="net"><span class="v" id="ssid">—</span><button class="sm" id="bwifi">Change</button></span>
+            </div>
+            <div class="row"><span class="l">Wi-Fi signal</span><span class="v" id="rssi">—</span></div>
+            <div class="row"><span class="l">Address</span><span class="v" id="ip">—</span></div>
+            <div class="row"><span class="l">RainMaker</span><span class="v" id="cloud">—</span></div>
+            <div class="row"><span class="l">Free memory</span><span class="v" id="hfree">—</span></div>
+            <div class="row"><span class="l">Largest block</span><span class="v" id="hmax">—</span></div>
+            <div class="row"><span class="l">Lowest free</span><span class="v" id="hmin">—</span></div>
+            <div class="row"><span class="l">Uptime</span><span class="v" id="upt">—</span></div>
+            <div class="row"><span class="l">Last restart</span><span class="v" id="rst">—</span></div>
+            <div class="row"><span class="l">Wi-Fi drops</span><span class="v" id="drops">—</span></div>
+            <div class="row"><span class="l">Last drop</span><span class="v" id="ldrop">—</span></div>
+            <div class="row"><span class="l">Web server</span><span class="v" id="webst">—</span></div>
+            <div class="row">
+              <span class="l">TX power</span>
+              <select id="txp">
+                <option value="0">2 dBm</option>
+                <option value="1">5 dBm</option>
+                <option value="2">7 dBm</option>
+                <option value="3">8.5 dBm</option>
+                <option value="4">11 dBm</option>
+                <option value="5">13 dBm</option>
+                <option value="6">15 dBm</option>
+                <option value="7">17 dBm</option>
+                <option value="8">19.5 dBm</option>
+              </select>
+            </div>
+            <div class="row">
+              <span class="l">Wi-Fi sleep</span>
+              <select id="wsl">
+                <option value="0">Off</option>
+                <option value="1">On</option>
+              </select>
+            </div>
+            <div class="row"><span class="l">Firmware</span><span class="v" id="fw">—</span></div>
+
+            <div class="sec">Update</div>
+            <div class="file">
+              <span id="fwname">No file chosen</span>
+              <button class="sm" id="bpick">Choose .bin</button>
+              <input type="file" id="fwfile" accept=".bin" hidden />
+            </div>
+            <div class="grid2">
+              <button id="bupd">Install update</button>
+              <button id="breboot">Restart</button>
+            </div>
+            <div class="bar"><i id="ubar"></i></div>
+            <p class="msg" id="umsg"></p>
+
+            <div class="sec">Backup</div>
+            <div class="grid2">
+              <button id="bbak">Download backup</button>
+              <button id="bimp">Import backup</button>
+            </div>
+            <input type="file" id="bfile" accept="application/json,.json" hidden />
+            <p class="msg" id="bmsg"></p>
+            <p class="hint">Learned buttons, names, modes and settings. Wi-Fi and RainMaker pairing aren't included.</p>
+          </div>
+        </section>
+      </div>
+      <div class="foot" id="foot"></div>
+    </main>
+
+    <dialog id="wdlg" aria-labelledby="wdlgT">
+      <h3 id="wdlgT">Change Wi-Fi</h3>
+      <p>
+        The receiver tries the new network for up to 30 s. If it can't connect it goes back to <b id="wcur">—</b>, so
+        nothing is lost. Learned buttons and RainMaker stay as they are.
+      </p>
+      <div class="wl"><span>Networks nearby</span><button class="lnk" id="wscan">Scan again</button></div>
+      <select id="wsel" aria-label="Networks nearby">
+        <option value="">Scanning…</option>
+      </select>
+      <label class="wl" for="wname">Network name</label>
+      <input type="text" id="wname" maxlength="32" autocomplete="off" spellcheck="false" />
+      <label class="wl" for="wpass">Password</label>
+      <div class="wpw">
+        <input type="password" id="wpass" maxlength="63" autocomplete="off" />
+        <button id="wshow" aria-pressed="false">Show</button>
+      </div>
+      <div class="wst" id="wst" role="status"></div>
+      <div class="grid2">
+        <button id="wno">Close</button>
+        <button class="p" id="wgo">Connect</button>
+      </div>
+    </dialog>
+
+    <dialog id="dlg" aria-labelledby="dlgT">
+      <h3 id="dlgT"></h3>
+      <p id="dlgM"></p>
+      <div class="grid2">
+        <button id="dlgNo">Cancel</button>
+        <button class="p" id="dlgYes"></button>
+      </div>
+    </dialog>
+
+    <script>
+      const N = 8,
+        LOG = 8,
+        $ = (id) => document.getElementById(id);
+      let cfg = null,
+        rev = -1,
+        sig = [],
+        logSig = "",
+        lastOk = 0,
+        fails = 0,
+        st = null,
+        uploading = false,
+        timer = 0,
+        inflight = null;
+      const esc = (s) =>
+        String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+
+      // ---- Small helpers ----
+      function ask(title, text, yes) {
+        return new Promise((res) => {
+          $("dlgT").textContent = title;
+          $("dlgM").textContent = text;
+          $("dlgYes").textContent = yes;
+          const d = $("dlg");
+          $("dlgYes").onclick = () => {
+            d.close();
+            res(true);
+          };
+          $("dlgNo").onclick = () => {
+            d.close();
+            res(false);
+          };
+          d.onclose = () => res(false);
+          d.showModal();
+        });
+      }
+      function msg(id, t, kind) {
+        const e = $(id);
+        e.textContent = t || "";
+        e.className = "msg" + (kind ? " " + kind : "");
+      }
+      async function post(url, body, type) {
+        try {
+          const r = await fetch(url, {
+            method: "POST",
+            headers: body ? { "Content-Type": type || "application/x-www-form-urlencoded" } : {},
+            body: body || "",
+          });
+          const j = await r.json();
+          pollNow();
+          return j;
+        } catch (e) {
+          pollNow();
+          return { ok: false, msg: "Couldn't reach the receiver" };
+        }
+      }
+      function kb(n) {
+        return (n / 1024).toFixed(1) + " KB";
+      }
+      function dur(s) {
+        s = Math.max(0, Math.round(s));
+        const d = Math.floor(s / 86400),
+          h = Math.floor((s % 86400) / 3600),
+          m = Math.floor((s % 3600) / 60);
+        if (d) return d + " d " + h + " h";
+        if (h) return h + " h " + m + " min";
+        if (m) return m + " min";
+        return s + " s";
+      }
+      function signal(r) {
+        if (!r) return "—";
+        return r + " dBm, " + (r > -60 ? "strong" : r > -70 ? "good" : r > -78 ? "fair" : "weak");
+      }
+
+      // ---- Build the fixed rows once ----
+      function build() {
+        let h = "";
+        for (let i = 0; i < N; i++)
+          h +=
+            '<div class="srow"><span class="dot" id="d' + i + '"></span><span class="num">' + String(i + 1).padStart(2, "0") +
+            '</span><input class="sname" type="text" id="n' + i + '" maxlength="23" aria-label="Name of sensor ' + (i + 1) +
+            '"><select class="smode" id="m' + i + '" aria-label="Mode of sensor ' + (i + 1) +
+            '"><option value="0">Momentary</option><option value="1">Toggle</option></select><span class="state" id="s' + i +
+            '"></span><div class="codes" id="c' + i + '"></div><div class="act"><button class="learnb" id="l' + i +
+            '">Learn</button><button id="x' + i + '">Clear</button></div></div>';
+        $("slots").insertAdjacentHTML("beforeend", h);
+        let lh = "";
+        for (let k = 0; k < LOG; k++) lh += '<div class="lrow" id="g' + k + '"></div>';
+        $("log").innerHTML = lh;
+
+        for (let i = 0; i < N; i++) {
+          const n = $("n" + i);
+          n.addEventListener("change", () => post("/api/slot", "slot=" + i + "&label=" + encodeURIComponent(n.value)));
+          n.addEventListener("keydown", (e) => {
+            if (e.key === "Enter") n.blur();
+          });
+          $("m" + i).addEventListener("change", (e) => post("/api/slot", "slot=" + i + "&mode=" + e.target.value));
+          $("l" + i).addEventListener("click", () =>
+            post($("l" + i).classList.contains("active") ? "/api/cancel" : "/api/learn", "slot=" + i),
+          );
+          $("x" + i).addEventListener("click", async () => {
+            const c = cfg && cfg.slots[i];
+            if (!c || !c.codes.length) return;
+            if (await ask("Clear " + c.label + "?", (c.codes.length > 1 ? "This removes all " + c.codes.length + " learned buttons from " : "This removes the learned button from ") + c.label + ". The sensor stays in RainMaker and Alexa.", "Clear"))
+              post("/api/clear", "slot=" + i);
+          });
+          $("c" + i).addEventListener("click", (e) => {
+            const k = e.target.dataset.k;
+            if (k !== undefined) post("/api/delcode", "slot=" + i + "&i=" + k);
+          });
+        }
+        $("log").addEventListener("change", (e) => {
+          const id = e.target.dataset.id;
+          if (id && e.target.value !== "") post("/api/assign", "id=" + id + "&slot=" + e.target.value);
+        });
+        const saveSettings = () =>
+          post("/api/settings", "hold=" + $("hold").value + "&release=" + $("rel").value + "&txPower=" + $("txp").value + "&wifiSleep=" + $("wsl").value);
+        ["hold", "rel", "txp", "wsl"].forEach((k) => $(k).addEventListener("change", saveSettings));
+      }
+
+      // ---- Config: names, modes, codes, settings (reloaded when rev changes) ----
+      async function loadConfig() {
+        try {
+          const r = await fetch("/api/config", { cache: "no-store" });
+          cfg = await r.json();
+          rev = cfg.rev;
+        } catch (e) {
+          return;
+        }
+        cfg.slots.forEach((sl, i) => {
+          const n = $("n" + i);
+          if (document.activeElement !== n) n.value = sl.label;
+          const m = $("m" + i);
+          if (document.activeElement !== m) m.value = sl.mode;
+          const g = JSON.stringify(sl.codes);
+          if (g !== sig[i]) {
+            sig[i] = g;
+            $("c" + i).innerHTML = sl.codes.length
+              ? sl.codes
+                  .map(
+                    (c, k) =>
+                      '<span class="chip" title="' + esc(c.t) + " 0x" + c.v + " (" + c.b + ' bits)">' + esc(c.t) + " 0x" + c.v +
+                      '<b data-k="' + k + '" role="button" aria-label="Remove ' + esc(c.t) + " 0x" + c.v + '">×</b></span>',
+                  )
+                  .join("")
+              : '<span class="none">No buttons yet. Press Learn.</span>';
+          }
+        });
+        for (const [k, v] of [["hold", cfg.hold], ["rel", cfg.release], ["txp", cfg.txPower], ["wsl", cfg.wifiSleep]])
+          if (document.activeElement !== $(k)) $(k).value = v;
+        logSig = "";
+        if (st) render(st);
+      }
+
+      // ---- Status: everything that changes by itself ----
+      function render(s) {
+        st = s;
+        $("sub").textContent = s.host + ".local, " + (s.ip || "not connected");
+        $("status").className = "vfd " + s.mt;
+        $("stxt").textContent = s.msg;
+        $("aW").className = s.ip && !s.hotspot ? "on" : "";
+        $("aR").className = s.cloud == "Connected" ? "on" : "";
+        $("aL").className = s.learn >= 0 ? "amb" : "";
+        $("aH").className = s.hotspot ? "amb" : "";
+        $("aU").className = uploading || s.fwConfirming ? "amb" : "";
+        if (!cfg) return;
+        for (let i = 0; i < N; i++) {
+          $("d" + i).className = "dot" + (s.closed[i] ? " closed" : "") + (s.hit[i] ? " on" : "");
+          const se = $("s" + i);
+          se.textContent = s.closed[i] ? "Closed" : "Open";
+          se.className = "state" + (s.closed[i] ? " closed" : "");
+          const l = $("l" + i),
+            on = s.learn === i;
+          l.classList.toggle("active", on);
+          l.textContent = on ? "Cancel" : "Learn";
+        }
+        const ls = JSON.stringify(s.log.map((e) => [e.id, e.slot]));
+        if (ls !== logSig) {
+          logSig = ls;
+          const opts = cfg.slots.map((x, i) => '<option value="' + i + '">' + (i + 1) + ". " + esc(x.label) + "</option>").join("");
+          for (let k = 0; k < LOG; k++) {
+            const e = s.log[k],
+              r = $("g" + k);
+            if (!e) {
+              r.innerHTML = k === 0 ? '<span class="lcode none">Press any button on a remote to see it here.</span>' : "";
+              continue;
+            }
+            const who =
+              e.slot >= 0
+                ? '<span class="lwho ok">' + esc(cfg.slots[e.slot].label) + "</span>"
+                : '<span class="lwho none">Not assigned</span>';
+            const sel =
+              e.slot >= 0
+                ? ""
+                : '<select class="lsel" data-id="' + e.id + '" aria-label="Assign this button"><option value="">Assign to…</option>' + opts + "</select>";
+            r.innerHTML =
+              '<span class="lage" id="a' + k + '"></span><span class="lcode" title="' + e.b + ' bits">' + esc(e.t) + " 0x" + e.v + "</span>" + who + sel;
+          }
+        }
+        s.log.forEach((e, k) => {
+          const a = $("a" + k);
+          if (a) a.textContent = e.age < 5000 ? "just now" : dur(e.age / 1000) + " ago";
+        });
+
+        $("ssid").textContent = s.hotspot ? "Setup hotspot open" : s.ssid || "—";
+        $("rssi").textContent = signal(s.rssi);
+        $("ip").textContent = s.ip || "—";
+        $("cloud").textContent = s.cloud;
+        $("hfree").textContent = kb(s.heapFree);
+        $("hmax").textContent = kb(s.heapMax);
+        $("hmin").textContent = kb(s.heapMin);
+        $("upt").textContent = dur(s.uptime);
+        $("rst").textContent = s.restart + (s.wdBoots ? " (" + s.wdBoots + " since power-on)" : "");
+        $("drops").textContent = s.drops ? String(s.drops) : "None";
+        $("ldrop").textContent = s.drops ? dur(s.dropAgo) + " ago, " + s.dropReason.toLowerCase() : "—";
+        $("ldrop").title = $("ldrop").textContent;
+        $("webst").textContent = s.sendErrs ? s.sendErrs + " failed sends" : "OK";
+        $("fw").textContent = "v" + s.fw + (s.fwConfirming ? ", confirming…" : "");
+        $("fw").className = "v" + (s.fwConfirming ? " amb" : "");
+        $("foot").textContent = "Smart IR Receiver v" + s.fw;
+        wifiStatus(s);
+        if (s.rev !== rev) loadConfig();
+      }
+
+      // ---- Polling: one request at a time, 4 s abort, paused while hidden ----
+      async function poll() {
+        clearTimeout(timer);
+        if (document.hidden) return;
+        const ac = new AbortController();
+        inflight = ac;
+        const t = setTimeout(() => ac.abort(), 4000);
+        try {
+          const r = await fetch("/api/status", { cache: "no-store", signal: ac.signal });
+          const s = await r.json();
+          lastOk = Date.now();
+          fails = 0;
+          if (!cfg) {
+            build();
+            await loadConfig();
+          }
+          render(s);
+        } catch (e) {
+          if (++fails >= 3 && !uploading) {
+            $("status").className = "vfd warn";
+            $("stxt").textContent = "No signal from the receiver. Retrying…";
+            ["aW", "aR", "aL", "aH"].forEach((k) => ($(k).className = ""));
+          }
+        }
+        clearTimeout(t);
+        inflight = null;
+        timer = setTimeout(poll, 1000);
+      }
+      function pollNow() {
+        if (inflight) return;
+        clearTimeout(timer);
+        timer = setTimeout(poll, 60);
+      }
+      document.addEventListener("visibilitychange", () => {
+        if (!document.hidden) pollNow();
+      });
+
+      // ---- Wi-Fi ----
+      let wOpen = false,
+        wTesting = false;
+      function wSt(t, c) {
+        $("wst").textContent = t;
+        $("wst").className = "wst" + (c ? " " + c : "");
+      }
+      function bars(r) {
+        return r > -60 ? "●●●●" : r > -70 ? "●●●○" : r > -80 ? "●●○○" : "●○○○";
+      }
+      async function wScan() {
+        const sel = $("wsel");
+        sel.innerHTML = '<option value="">Scanning…</option>';
+        for (let i = 0; i < 10; i++) {
+          try {
+            const j = await (await fetch("/api/wifi/scan", { cache: "no-store" })).json();
+            if (j.nets) {
+              sel.innerHTML =
+                '<option value="">' + (j.nets.length ? "Pick a network…" : "None found") + "</option>" +
+                j.nets.map((n) => '<option value="' + esc(n.ssid) + '">' + esc(n.ssid) + "  " + bars(n.rssi) + (n.open ? "  (open)" : "") + "</option>").join("");
+              return;
+            }
+          } catch (e) {}
+          await new Promise((r) => setTimeout(r, 1000));
+        }
+        sel.innerHTML = '<option value="">Scan failed</option>';
+      }
+      function wifiStatus(s) {
+        if (!wOpen) return;
+        if (s.wt == 1) {
+          wTesting = true;
+          wSt("Trying " + s.wtSsid + "…");
+        } else if (wTesting && s.wt == 3) {
+          wTesting = false;
+          wSt("Couldn’t connect to " + s.wtSsid + ": " + s.wtMsg + ". Still on " + s.ssid + ".", "bad");
+          $("wgo").disabled = false;
+        } else if (wTesting && s.wt == 2) {
+          wTesting = false;
+          wSt("Connected to " + s.ssid + " and saved.", "ok");
+          $("wgo").disabled = false;
+        }
+      }
+      $("bwifi").onclick = () => {
+        wOpen = true;
+        wTesting = false;
+        $("wcur").textContent = $("ssid").textContent;
+        $("wname").value = "";
+        $("wpass").value = "";
+        $("wpass").type = "password";
+        $("wshow").textContent = "Show";
+        wSt("");
+        $("wgo").disabled = false;
+        $("wdlg").showModal();
+        wScan();
+      };
+      $("wdlg").onclose = () => (wOpen = false);
+      $("wno").onclick = () => $("wdlg").close();
+      $("wscan").onclick = () => wScan();
+      $("wsel").onchange = (e) => {
+        if (e.target.value) {
+          $("wname").value = e.target.value;
+          $("wpass").focus();
+        }
+      };
+      $("wshow").onclick = () => {
+        const p = $("wpass"),
+          v = p.type == "password";
+        p.type = v ? "text" : "password";
+        $("wshow").textContent = v ? "Hide" : "Show";
+        $("wshow").setAttribute("aria-pressed", v);
+      };
+      $("wgo").onclick = async () => {
+        const n = $("wname").value.trim();
+        if (!n) {
+          wSt("Pick or type a network name.", "bad");
+          return;
+        }
+        $("wgo").disabled = true;
+        wTesting = true;
+        wSt("Trying " + n + "… This page may drop for up to 30 s. If it connects, move your phone to " + n + " and open irremote.local.");
+        try {
+          await fetch("/api/wifi", {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: "ssid=" + encodeURIComponent(n) + "&pass=" + encodeURIComponent($("wpass").value),
+          });
+        } catch (e) {}
+      };
+
+      // ---- Firmware update ----
+      $("bpick").onclick = () => $("fwfile").click();
+      $("fwfile").onchange = () => {
+        const f = $("fwfile").files[0];
+        $("fwname").textContent = f ? f.name + " (" + (f.size / 1048576).toFixed(2) + " MB)" : "No file chosen";
+        msg("umsg", "");
+      };
+      $("bupd").onclick = async () => {
+        const f = $("fwfile").files[0];
+        if (!f) {
+          msg("umsg", "Choose the OTA .bin file first.", "bad");
+          return;
+        }
+        if (!/\.bin$/i.test(f.name)) {
+          msg("umsg", "That isn't a .bin firmware file.", "bad");
+          return;
+        }
+        if (!(await ask("Install update?", "Installs " + f.name + " and restarts the receiver. Learned buttons, settings and Wi-Fi are kept.", "Install")))
+          return;
+        uploading = true;
+        $("bupd").disabled = true;
+        msg("umsg", "Uploading…");
+        const x = new XMLHttpRequest();
+        x.open("POST", "/update");
+        x.setRequestHeader("Content-Type", "application/octet-stream");
+        x.upload.onprogress = (e) => {
+          if (e.lengthComputable) $("ubar").style.width = Math.round((100 * e.loaded) / e.total) + "%";
+        };
+        x.onload = () => {
+          if (x.status == 200) {
+            $("ubar").style.width = "100%";
+            msg("umsg", "Installed. Restarting… this page reconnects by itself.", "ok");
+            setTimeout(() => {
+              uploading = false;
+              $("bupd").disabled = false;
+              $("ubar").style.width = "0";
+            }, 20000);
+          } else {
+            uploading = false;
+            $("bupd").disabled = false;
+            $("ubar").style.width = "0";
+            msg("umsg", "Update failed: " + (x.responseText || "error " + x.status), "bad");
+          }
+        };
+        x.onerror = () => {
+          uploading = false;
+          $("bupd").disabled = false;
+          $("ubar").style.width = "0";
+          msg("umsg", "Upload interrupted. Restart the receiver, wait a minute and try again.", "bad");
+        };
+        x.send(f);
+      };
+      $("breboot").onclick = async () => {
+        if (await ask("Restart the receiver?", "It's back in about 15 seconds. Learned buttons and settings are kept.", "Restart")) {
+          const r = await post("/api/cmd", "cmd=reboot");
+          msg("umsg", r.msg || "Restarting…", r.ok ? "ok" : "bad");
+        }
+      };
+
+      // ---- Backup ----
+      $("bbak").onclick = async () => {
+        try {
+          const j = await (await fetch("/api/backup", { cache: "no-store" })).json();
+          const name = "SmartIRReceiver-backup-" + new Date().toISOString().slice(0, 10) + ".json";
+          const a = document.createElement("a");
+          a.href = URL.createObjectURL(new Blob([JSON.stringify(j, null, 2)], { type: "application/json" }));
+          a.download = name;
+          a.click();
+          setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+          msg("bmsg", "Saved " + name, "ok");
+        } catch (e) {
+          msg("bmsg", "Couldn't download the backup.", "bad");
+        }
+      };
+      $("bimp").onclick = () => $("bfile").click();
+      $("bfile").onchange = async () => {
+        const f = $("bfile").files[0];
+        $("bfile").value = "";
+        if (!f) return;
+        let txt, j;
+        try {
+          txt = await f.text();
+          j = JSON.parse(txt);
+        } catch (e) {
+          msg("bmsg", "That file isn’t a Smart IR Receiver backup.", "bad");
+          return;
+        }
+        if (j.app !== "SmartIRReceiver" || !Array.isArray(j.slots)) {
+          msg("bmsg", "That file isn’t a Smart IR Receiver backup.", "bad");
+          return;
+        }
+        const when = j.savedAt ? new Date(j.savedAt * 1000).toLocaleDateString() : "an unknown date";
+        if (!(await ask("Import backup?", "Replace all learned buttons, names, modes and settings with the backup from " + when + "? Wi-Fi and RainMaker pairing aren’t changed.", "Import")))
+          return;
+        const r = await post("/api/backup", txt, "application/json");
+        msg("bmsg", r.ok ? "Restored from the backup." : r.msg || "Import failed.", r.ok ? "ok" : "bad");
+      };
+
+      poll();
+    </script>
+  </body>
+</html>

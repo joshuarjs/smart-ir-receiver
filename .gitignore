@@ -1,0 +1,4 @@
+# build output and firmware images (firmware goes on the GitHub Releases page)
+*.bin
+build/
+__pycache__/
